@@ -8,7 +8,7 @@ class AggregatorServer
 {
     private static int port = 4000;
     private static string serverIP = "127.0.0.1"; // IP do SERVIDOR
-    private static int serverPort = 6000;         //Porta do SERVIDOR
+    private static int serverPort = 13000;         //Porta do SERVIDOR
 
     static void Main()
     {

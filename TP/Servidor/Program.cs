@@ -3,58 +3,55 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 
-class MyTcpListener
+class DataServer
 {
-    public static void Main()
+    private static int port = 13000;
+    private static string dataFile = "dados_oceanicos.txt";
+
+    private static object fileLock = new object(); // Mutex para controlo do acesso ao arquivo
+
+    static void Main()
     {
-        try
+        TcpListener server = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
+        server.Start();
+        Console.WriteLine("SERVIDOR pronto para receber dados...");
+
+        while (true)
         {
-            int port = 13000;
-            IPAddress localAddr = IPAddress.Parse("127.0.0.1");
-            TcpListener server = new TcpListener(localAddr, port);
-            server.Start();
+            TcpClient client = server.AcceptTcpClient();
+            Thread clientThread = new Thread(() => HandleClient(client));
+            clientThread.Start();
+        }
+    }
 
-            Console.WriteLine("Servidor esperando conexão...");
-            TcpClient agregador = server.AcceptTcpClient();
-            Console.WriteLine("Cliente conectado!"); //Ligação Bilateral, entre apenas o servidor e o agregador
+    static void HandleClient(TcpClient client)
+    {
+        using (NetworkStream stream = client.GetStream())
+        {
+            byte[] buffer = new byte[1024];
+            int bytesRead;
 
-            NetworkStream stream = agregador.GetStream();
-            byte[] buffer = new byte[256];
-            string msgOK = "100 OK";
-            byte[] dataOK = Encoding.ASCII.GetBytes(msgOK);
-            stream.Write(dataOK, 0, dataOK.Length);
-            // Criar thread para receber mensagens
-            Thread receiveThread = new Thread(() =>
+            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
-                try
+                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                Console.WriteLine($"Recebido: {message}");
+
+                if (message.StartsWith("DADOS"))
                 {
-                    while (true)
-                    {
-                        int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                        if (bytesRead == 0) break;
-
-                        string receivedMessage = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                        Console.WriteLine("\nAgregador: " + receivedMessage);
-                        Console.Write("Servidor: ");
-                    }
+                    SaveData(message);
                 }
-                catch { }
-            });
-            receiveThread.Start();
-
-            // Loop para envio de mensagens
-            while (true)
-            {
-                Console.Write("Servidor: ");
-                string message = Console.ReadLine();
-                byte[] data = Encoding.ASCII.GetBytes(message);
-                stream.Write(data, 0, data.Length);
             }
         }
-        catch (Exception e)
+    }
+
+    static void SaveData(string data)
+    {
+        lock (fileLock)
         {
-            Console.WriteLine("Erro: " + e.Message);
+            File.AppendAllText(dataFile, data + Environment.NewLine);
+            Console.WriteLine("Dados armazenados com sucesso.");
         }
     }
 }
