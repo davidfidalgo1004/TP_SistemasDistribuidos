@@ -8,7 +8,7 @@ using System.Threading;
 class DataServer
 {
     private static int port = 13000;
-    private static string dataFile = "dados_oceanicos.txt";
+    private static string dataFile = "dados_oceanos.txt"; //O nomme do ficheiro onde vao ser guardados
 
     private static object fileLock = new object(); // Mutex para controlo do acesso ao arquivo
 
