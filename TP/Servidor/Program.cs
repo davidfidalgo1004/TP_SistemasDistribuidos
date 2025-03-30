@@ -3,14 +3,14 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 
 class DataServer
 {
     private static int port = 13000;
-    private static string dataFile = "dados_oceanos.txt"; //O nomme do ficheiro onde vao ser guardados
-
-    private static object fileLock = new object(); // Mutex para controlo do acesso ao arquivo
+    private static string dataFile = "dados_oceanos.txt"; // Arquivo para armazenar os dados recebidos
+    private static object fileLock = new object();
 
     static void Main()
     {
@@ -28,30 +28,39 @@ class DataServer
 
     static void HandleClient(TcpClient client)
     {
-        using (NetworkStream stream = client.GetStream())
+        try
         {
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-
-            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+            using (NetworkStream stream = client.GetStream())
             {
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                Console.WriteLine($"Recebido: {message}");
-
-                if (message.StartsWith("DADOS"))
+                // Usamos um MemoryStream para acumular os bytes lidos
+                using (MemoryStream ms = new MemoryStream())
                 {
-                    SaveData(message);
+                    byte[] buffer = new byte[1024];
+                    int bytesRead;
+                    // Lê os dados enquanto houver bytes sendo enviados
+                    while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        ms.Write(buffer, 0, bytesRead);
+                    }
+                    // Converte os bytes lidos para string (conteúdo do JSON)
+                    string jsonData = Encoding.UTF8.GetString(ms.ToArray());
+                    Console.WriteLine($"Arquivo JSON recebido: {jsonData}");
+
+                    // Caso queira desserializar os dados para uma lista, por exemplo:
+                    // var dados = JsonSerializer.Deserialize<List<string>>(jsonData);
+
+                    // Armazena os dados recebidos em um arquivo, se necessário:
+                    lock (fileLock)
+                    {
+                        File.AppendAllText(dataFile, jsonData + Environment.NewLine);
+                        Console.WriteLine("Dados armazenados com sucesso.");
+                    }
                 }
             }
         }
-    }
-
-    static void SaveData(string data)
-    {
-        lock (fileLock)
+        catch (Exception e)
         {
-            File.AppendAllText(dataFile, data + Environment.NewLine);
-            Console.WriteLine("Dados armazenados com sucesso.");
+            Console.WriteLine("Erro ao receber dados: " + e.Message);
         }
     }
 }
