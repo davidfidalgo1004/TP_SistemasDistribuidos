@@ -5,22 +5,30 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using Servidor;  // Contém as classes Agregador, Wavy, Sensor e DBContext
+using Microsoft.EntityFrameworkCore;
 
 class DataServer
 {
     private static int port = 13000;
-    private static string dataFile = "dados_oceanos.txt"; // Arquivo para armazenar os dados recebidos
-    private static object fileLock = new object();
+    private static object dbLock = new object();
 
     static void Main()
     {
-        TcpListener server = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
-        server.Start();
-        Console.WriteLine("SERVIDOR pronto para receber dados...");
+        // Inicializa o banco de dados (cria as tabelas se ainda não existirem)
+        using (var context = new DBContext())
+        {
+            context.Database.EnsureCreated();
+            Console.WriteLine("Banco de dados inicializado.");
+        }
+
+        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
+        listener.Start();
+        Console.WriteLine("SERVIDOR EM ESCUTA...");
 
         while (true)
         {
-            TcpClient client = server.AcceptTcpClient();
+            TcpClient client = listener.AcceptTcpClient();
             Thread clientThread = new Thread(() => HandleClient(client));
             clientThread.Start();
         }
@@ -31,36 +39,88 @@ class DataServer
         try
         {
             using (NetworkStream stream = client.GetStream())
+            using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+            using (StreamWriter writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
             {
-                // Usamos um MemoryStream para acumular os bytes lidos
-                using (MemoryStream ms = new MemoryStream())
+                
+                writer.WriteLine("OK 100");
+                Console.WriteLine("Enviado: OK 100");
+
+                string line;
+                while ((line = reader.ReadLine()) != null)
                 {
-                    byte[] buffer = new byte[1024];
-                    int bytesRead;
-                    // Lê os dados enquanto houver bytes sendo enviados
-                    while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+                    // Se receber "QUIT", envia "BYE" e encerra a conexão
+                    if (line.Trim().Equals("QUIT", StringComparison.OrdinalIgnoreCase))
                     {
-                        ms.Write(buffer, 0, bytesRead);
+                        writer.WriteLine("BYE");
+                        Console.WriteLine("Recebido QUIT, enviando BYE e fechando conexão.");
+                        break;
                     }
-                    // Converte os bytes lidos para string (conteúdo do JSON)
-                    string jsonData = Encoding.UTF8.GetString(ms.ToArray());
-                    Console.WriteLine($"Arquivo JSON recebido: {jsonData}");
-
-                    // Caso queira desserializar os dados para uma lista, por exemplo:
-                    // var dados = JsonSerializer.Deserialize<List<string>>(jsonData);
-
-                    // Armazena os dados recebidos em um arquivo, se necessário:
-                    lock (fileLock)
+                    else
                     {
-                        File.AppendAllText(dataFile, jsonData + Environment.NewLine);
-                        Console.WriteLine("Dados armazenados com sucesso.");
+                        Console.WriteLine("Mensagem recebida:");
+                        Console.WriteLine(line);
+
+                        // Tenta desserializar o JSON recebido para a estrutura Agregador
+                        try
+                        {
+                            Agregador agregador = JsonSerializer.Deserialize<Agregador>(line);
+                            if (agregador != null)
+                            {
+                                SaveAgregador(agregador);
+                            }
+                            else
+                            {
+                                Console.WriteLine("Falha ao desserializar o JSON para a estrutura Agregador.");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("Erro ao desserializar JSON: " + ex.Message);
+                        }
                     }
                 }
             }
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            Console.WriteLine("Erro ao receber dados: " + e.Message);
+            Console.WriteLine("Erro no tratamento do cliente: " + ex.Message);
+        }
+        finally
+        {
+            client.Close();
+        }
+    }
+
+    // Método que salva ou atualiza o objeto Agregador na base de dados
+    static void SaveAgregador(Agregador agregador)
+    {
+        lock (dbLock)
+        {
+            using (var context = new DBContext())
+            {
+                // Verifica se já existe um Agregador com o mesmo nome
+                var existingAgregador = context.Agregadores
+                    .Include(a => a.Wavys)
+                        .ThenInclude(w => w.Sensores)
+                    .FirstOrDefault(a => a.Name == agregador.Name);
+
+                if (existingAgregador != null)
+                {
+                    // Neste exemplo, removemos os Wavys antigos e inserimos os novos
+                    context.Wavys.RemoveRange(existingAgregador.Wavys);
+                    existingAgregador.Wavys = agregador.Wavys;
+                    context.SaveChanges();
+                    Console.WriteLine("Agregador existente atualizado com novos dados.");
+                }
+                else
+                {
+                    // Insere um novo Agregador na base de dados
+                    context.Agregadores.Add(agregador);
+                    context.SaveChanges();
+                    Console.WriteLine("Novo agregador salvo na base de dados.");
+                }
+            }
         }
     }
 }
