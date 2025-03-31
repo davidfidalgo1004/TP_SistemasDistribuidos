@@ -6,7 +6,7 @@ using System.Threading;
 
 class AggregatorServer
 {
-    private static int port = 4000;
+    private static int port = 7000;
     private static string serverIP = "127.0.0.1"; // IP do SERVIDOR
     private static int serverPort = 6000;         //Porta do SERVIDOR
 
