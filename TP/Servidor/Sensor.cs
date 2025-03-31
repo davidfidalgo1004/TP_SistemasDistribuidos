@@ -11,6 +11,7 @@ namespace Servidor
         public int Id { get; set; }
 
         public string? Nome { get; set; }
-        public float Valores {  get; set; }
+        public DateTime DataHora { get; set; }
+        public string? JsonData { get; set; }
     }
 }

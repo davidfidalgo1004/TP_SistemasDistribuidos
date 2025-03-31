@@ -12,5 +12,6 @@ namespace Agregador
 
         public string? Nome { get; set; }
         public float Valores {  get; set; }
+        public DateTime DataHora { get; set; }
     }
 }

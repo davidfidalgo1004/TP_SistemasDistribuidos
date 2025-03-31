@@ -117,7 +117,7 @@ class AggregatorServer
     static void AgendarEnvio()
     {
         DateTime agora = DateTime.Now;
-        DateTime proximoEnvio = new DateTime(agora.Year, agora.Month, agora.Day, 22, 30, 0);
+        DateTime proximoEnvio = new DateTime(agora.Year, agora.Month, agora.Day, 14,42, 0);
         if (agora > proximoEnvio)
             proximoEnvio = proximoEnvio.AddDays(1);
         TimeSpan tempoAteEnvio = proximoEnvio - agora;
