@@ -10,12 +10,9 @@ using Agregador;
 
 class AggregatorServer
 {
-    // Porta onde os wavys se conectam para enviar dados
-    private static int wavysPort = 4000;
-    // Dados de conexão com o servidor
-    private static string serverIP = "127.0.0.1";
-    private static int serverPort = 13000;
-    private static string jsonFileName = "dados.json";
+    private static int port = 7000;
+    private static string serverIP = "127.0.0.1"; // IP do SERVIDOR
+    private static int serverPort = 6000;         //Porta do SERVIDOR
 
     // Lista para acumular os dados recebidos dos wavys
     private static List<string> dadosRecebidos = new List<string>();

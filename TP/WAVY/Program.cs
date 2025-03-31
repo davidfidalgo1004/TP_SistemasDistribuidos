@@ -5,43 +5,54 @@ using System.Threading;
 
 class WavyClient
 {
-    private static string aggregatorIP = "127.0.0.1"; // IP do AGREGADOR
-    private static int port = 4000;                  // Porta do AGREGADOR
-    private static string wavyID = "WAVY_001";
+    private static string aggregatorIP = "127.0.0.1";
+    private static int aggregatorPort = 7000;
+    private static Timer envioTimer;
+    private static TcpClient client;
+    private static NetworkStream stream;
 
     static void Main()
     {
         try
         {
-            using (TcpClient client = new TcpClient(aggregatorIP, port))
-            using (NetworkStream stream = client.GetStream())
+            client = new TcpClient(aggregatorIP, aggregatorPort);
+            stream = client.GetStream();
+
+            Console.WriteLine("Ligação estabelecida com o agregador.");
+
+            // Envio imediato e depois a cada 30 minutos
+            envioTimer = new Timer(EnviarDadosCallback, null, TimeSpan.Zero, TimeSpan.FromMinutes(30));
+
+            // Mantém o programa vivo
+            while (true)
             {
-                Console.WriteLine("Conectado ao AGREGADOR!");
-
-                // Enviar registo
-                SendMessage(stream, $"REGISTRO|{wavyID}|ACELEROMETRO,GIROSCOPIO");
-
-                // Enviar dados periodicamente
-                for (int i = 0; i < 5; i++)
-                {
-                    SendMessage(stream, $"DADOS|{wavyID}|ACELEROMETRO|{new Random().Next(1, 100)}");
-                    Thread.Sleep(2000);
-                }
-
-                // Finalizar conexão
-                SendMessage(stream, $"FIM|{wavyID}");
+                Thread.Sleep(1000);
             }
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            Console.WriteLine($"Erro: {e.Message}");
+            Console.WriteLine("Erro ao conectar ao agregador: " + ex.Message);
         }
     }
 
-    static void SendMessage(NetworkStream stream, string message)
+    static void EnviarDadosCallback(object state)
     {
-        byte[] data = Encoding.UTF8.GetBytes(message);
-        stream.Write(data, 0, data.Length);
-        Console.WriteLine($"Enviado: {message}");
+        try
+        {
+            if (stream != null && stream.CanWrite)
+            {
+                // Simula um dado de sensor (personalize conforme necessário)
+                string dados = $"DADOS {{\"timestamp\":\"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\",\"valor\":{new Random().Next(0, 100)}}}";
+
+                byte[] message = Encoding.UTF8.GetBytes(dados);
+                stream.Write(message, 0, message.Length);
+
+                Console.WriteLine($"Dados enviados ao agregador: {dados}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Erro ao enviar dados: " + ex.Message);
+        }
     }
 }
