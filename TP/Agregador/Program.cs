@@ -8,51 +8,73 @@ using System.Text.Json;
 using System.Threading;
 using Agregador;
 
-class AggregatorServer
+class AgregadorServer
 {
     private static int port = 7000;
-    private static string serverIP = "127.0.0.1"; // IP do SERVIDOR
-    private static int serverPort = 6000;         //Porta do SERVIDOR
+    private static string serverIP = "127.0.0.1";
+    private static int serverPort = 6000;
 
-    // Lista para acumular os dados recebidos dos wavys
-    private static List<string> dadosRecebidos = new List<string>();
+    private static List<Wavy> wavys = new List<Wavy>();
     private static object dadosLock = new object();
+    private static string diretorioCsv = "csvs";
 
-    // Timer para atualizar o JSON a cada 30 minutos
-    private static Timer jsonUpdateTimer;
-    // Timer para enviar os dados agendados (ex.: às 22:30)
-    private static Timer envioTimer;
-
-    // Conexão persistente com o servidor
     private static TcpClient persistentServerClient;
     private static StreamReader serverReader;
     private static StreamWriter serverWriter;
 
+    private static Timer envioTimer;
+    private static Timer limpezaAutomaticaTimer;
+
     static void Main()
     {
-        // Conecta imediatamente ao servidor ao iniciar
         ConnectToServer();
-
-        // Agenda o envio do arquivo (por exemplo, às 22:30)
         AgendarEnvio();
 
-        // Agenda a atualização do JSON a cada 30 minutos
-        jsonUpdateTimer = new Timer(AtualizarJsonCallback, null, TimeSpan.Zero, TimeSpan.FromMinutes(30));
+        // Inicia limpeza automática a cada 2 dias
+        limpezaAutomaticaTimer = new Timer(_ => CsvExporter.LimparCsv(diretorioCsv, "."), null, TimeSpan.FromDays(2), TimeSpan.FromDays(2));
 
-        // Inicia o listener para receber conexões dos wavys
-        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.0.1"), wavysPort);
+        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
         listener.Start();
-        Console.WriteLine("AGREGADOR pronto para receber conexões de wavys...");
+        Console.WriteLine("AGREGADOR pronto para receber conexoes de WAVYs...");
 
         while (true)
         {
-            TcpClient client = listener.AcceptTcpClient();
-            Thread clientThread = new Thread(() => HandleWavyClient(client));
-            clientThread.Start();
+            Console.WriteLine("Comando (Clean . | Clean nome.csv | Export | Enviar):");
+            string input = Console.ReadLine();
+            if (input.StartsWith("Clean"))
+            {
+                var partes = input.Split(' ');
+                string alvo = partes.Length > 1 ? partes[1] : ".";
+                CsvExporter.LimparCsv(diretorioCsv, alvo);
+            }
+            else if (input.Equals("Export", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (dadosLock)
+                {
+                    CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+                }
+            }
+            else if (input.Equals("Enviar", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (dadosLock)
+                {
+                    CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+                    if (EnviarCsvsAoServidor())
+                    {
+                        CsvExporter.MarcarComoEnviado(wavys);
+                        CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+                    }
+                }
+            }
+            else
+            {
+                TcpClient client = listener.AcceptTcpClient();
+                Thread clientThread = new Thread(() => HandleWavyClient(client));
+                clientThread.Start();
+            }
         }
     }
 
-    // Método para conectar-se ao servidor e aguardar o "OK 100"
     static void ConnectToServer()
     {
         try
@@ -63,7 +85,7 @@ class AggregatorServer
             serverWriter = new StreamWriter(ns, Encoding.UTF8) { AutoFlush = true };
 
             string greeting = serverReader.ReadLine();
-            Console.WriteLine(greeting + "\nConexão ao servidor efetuado com sucesso!");
+            Console.WriteLine("Conectado ao servidor: " + greeting);
         }
         catch (Exception ex)
         {
@@ -71,105 +93,91 @@ class AggregatorServer
         }
     }
 
-    // Trata a conexão dos wavys (que enviam dados)
     static void HandleWavyClient(TcpClient client)
     {
         using (NetworkStream stream = client.GetStream())
+        using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
         {
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-            while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+            string linha;
+            while ((linha = reader.ReadLine()) != null)
             {
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                Console.WriteLine($"Recebido de wavys: {message}");
-                if (message.StartsWith("DADOS"))
+                Console.WriteLine("Recebido: " + linha);
+
+                if (linha.StartsWith("DADOS "))
                 {
-                    lock (dadosLock)
+                    string json = linha.Substring(6);
+                    try
                     {
-                        dadosRecebidos.Add(message);
+                        Sensor sensor = JsonSerializer.Deserialize<Sensor>(json);
+                        if (sensor != null)
+                        {
+                            lock (dadosLock)
+                            {
+                                // Aqui falta lógica para associar a WAVY correta
+                                // Exemplo rápido:
+                                Wavy wavy = wavys.Find(w => w.Name == "WAVY1");
+                                if (wavy == null)
+                                {
+                                    wavy = new Wavy { Name = "WAVY1" }; // ou outro ID real
+                                    wavys.Add(wavy);
+                                }
+                                wavy.Sensores.Add(sensor);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Erro ao processar sensor: " + ex.Message);
                     }
                 }
             }
         }
     }
 
-    // Callback do timer que atualiza o JSON a cada 30 minutos
-    static void AtualizarJsonCallback(object state)
-    {
-        lock (dadosLock)
-        {
-            AtualizarJson();
-        }
-    }
-
-    // Serializa a lista de dados para o arquivo JSON
-    static void AtualizarJson()
-    {
-        string json = JsonSerializer.Serialize(dadosRecebidos, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(jsonFileName, json);
-        Console.WriteLine("Arquivo JSON atualizado.");
-    }
-
-    // Agenda o envio do arquivo para um horário fixo (exemplo: 22:30)
     static void AgendarEnvio()
     {
         DateTime agora = DateTime.Now;
-        DateTime proximoEnvio = new DateTime(agora.Year, agora.Month, agora.Day, 14,42, 0);
+        DateTime proximoEnvio = new DateTime(agora.Year, agora.Month, agora.Day, 22, 30, 0);
         if (agora > proximoEnvio)
             proximoEnvio = proximoEnvio.AddDays(1);
-        TimeSpan tempoAteEnvio = proximoEnvio - agora;
-        envioTimer = new Timer(EnviarDados, null, tempoAteEnvio, Timeout.InfiniteTimeSpan);
-        Console.WriteLine($"Envio agendado para: {proximoEnvio}");
+
+        TimeSpan delay = proximoEnvio - agora;
+        envioTimer = new Timer(EnviarDadosAgendados, null, delay, Timeout.InfiniteTimeSpan);
+        Console.WriteLine("Envio agendado para: " + proximoEnvio);
     }
 
-    // Envia o arquivo JSON para o servidor usando a conexão persistente
-    static void EnviarDados(object state)
+    static void EnviarDadosAgendados(object state)
     {
-        try
-        {
-            // Atualiza o JSON antes de enviar
-            lock (dadosLock)
-            {
-                AtualizarJson();
-            }
-
-            string jsonContent = File.ReadAllText(jsonFileName);
-            // Envia o conteúdo JSON via conexão persistente
-            serverWriter.WriteLine(jsonContent);
-            Console.WriteLine($"Arquivo {jsonFileName} enviado para o servidor.");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Erro ao enviar o arquivo: " + ex.Message);
-        }
-
-        // Após o envio, limpa os dados e atualiza o JSON
         lock (dadosLock)
         {
-            dadosRecebidos.Clear();
-            AtualizarJson();
+            CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+            if (EnviarCsvsAoServidor())
+            {
+                CsvExporter.MarcarComoEnviado(wavys);
+                CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+            }
         }
-
-        // Reagenda o próximo envio
         AgendarEnvio();
     }
 
-    // Opcional: método para encerrar a conexão de forma graciosa
-    static void DisconnectFromServer()
+    static bool EnviarCsvsAoServidor()
     {
         try
         {
-            if (serverWriter != null)
+            foreach (var file in Directory.GetFiles(diretorioCsv, "*.csv"))
             {
-                serverWriter.WriteLine("QUIT");
-                string response = serverReader.ReadLine();
-                Console.WriteLine("Resposta do servidor: " + response);
+                string conteudo = File.ReadAllText(file);
+                serverWriter.WriteLine(conteudo);
             }
-            persistentServerClient.Close();
+            serverWriter.WriteLine("QUIT");
+
+            string resposta = serverReader.ReadLine();
+            return resposta.StartsWith("RECEBIDO 200");
         }
         catch (Exception ex)
         {
-            Console.WriteLine("Erro ao desconectar: " + ex.Message);
+            Console.WriteLine("Erro ao enviar CSVs: " + ex.Message);
+            return false;
         }
     }
 }

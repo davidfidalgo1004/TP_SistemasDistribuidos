@@ -1,17 +1,19 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Agregador
 {
-    class Sensor
+    public class Sensor
     {
         public int Id { get; set; }
 
         public string? Nome { get; set; }
-        public float Valores {  get; set; }
         public DateTime DataHora { get; set; }
+
+        // Novo: múltiplos valores para um sensor (ex: latitude, longitude)
+        public Dictionary<string, string> Valores { get; set; } = new Dictionary<string, string>();
+
+        // Novo: indica se os dados deste sensor já foram enviados
+        public bool DadosEnviados { get; set; } = false;
     }
 }
