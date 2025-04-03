@@ -1,183 +1,245 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
-using Agregador;
 
-class AgregadorServer
+class Aggregator
 {
-    private static int port = 7000;
-    private static string serverIP = "127.0.0.1";
-    private static int serverPort = 6000;
+    private static string pastaCsvs = "csvs";
+    private static string tempCsv = "aggregador_temp.csv";
+    private static string servidorIP = "127.0.1.1";
+    private static int servidorPorta = 8080;
 
-    private static List<Wavy> wavys = new List<Wavy>();
-    private static object dadosLock = new object();
-    private static string diretorioCsv = "csvs";
+    // Porta base do agregador
+    private static int portaAgregador = 7000;
 
-    private static TcpClient persistentServerClient;
-    private static StreamReader serverReader;
-    private static StreamWriter serverWriter;
-
-    private static Timer envioTimer;
-    private static Timer limpezaAutomaticaTimer;
+    // Tempo para envio periódico para o servidor
+    private static int intervaloEnvioMin = 30;
 
     static void Main()
     {
-        ConnectToServer();
-        AgendarEnvio();
+        Console.Write("ID do Agregador (Apenas o numero): ");
+        string agregadorID = Console.ReadLine()?.Trim();
+        if (!int.TryParse(agregadorID, out int idNumerico))
+        {
+            Console.WriteLine("ID inválido. Deve ser um número inteiro.");
+            return;
+        }
 
-        // Inicia limpeza automática a cada 2 dias
-        limpezaAutomaticaTimer = new Timer(_ => CsvExporter.LimparCsv(diretorioCsv, "."), null, TimeSpan.FromDays(2), TimeSpan.FromDays(2));
+        // Calcula porta com base no ID
+        portaAgregador = 7000 + idNumerico;
+        Console.WriteLine($"Agregador associado à porta {portaAgregador}.");
 
-        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
+        // Cria a pasta onde ficarão os CSV
+        Directory.CreateDirectory(pastaCsvs);
+        Console.WriteLine("Agregador em execução...");
+
+        // Thread para receber dados das WAVYs
+        new Thread(ServidorEscuta).Start();
+
+        // Timer para envio periódico (ex.: a cada 30min)
+        Timer envioTimer = new Timer(_ => EnviarCsvsAoServidor(), null,
+                                     TimeSpan.FromMinutes(1), // Tempo até ao 1º envio
+                                     TimeSpan.FromMinutes(intervaloEnvioMin));
+
+        // Timer para limpeza automática a cada 2 dias
+        Timer limpezaTimer = new Timer(_ => LimparCsvs(), null,
+                                       TimeSpan.FromDays(2),   // Tempo até primeira limpeza
+                                       TimeSpan.FromDays(2));  // Repetição a cada 2 dias
+
+        // Mantém a aplicação viva
+        while (true)
+        {
+            Thread.Sleep(1000);
+        }
+    }
+
+    // Escuta na portaAgregador e recebe CSV das WAVYs
+    static void ServidorEscuta()
+    {
+        TcpListener listener = new TcpListener(IPAddress.Any, portaAgregador);
         listener.Start();
-        Console.WriteLine("AGREGADOR pronto para receber conexoes de WAVYs...");
+        Console.WriteLine($"Agregador a escutar na porta {portaAgregador}...");
 
         while (true)
         {
-            Console.WriteLine("Comando (Clean . | Clean nome.csv | Export | Enviar):");
-            string input = Console.ReadLine();
-            if (input.StartsWith("Clean"))
+            TcpClient client = listener.AcceptTcpClient();
+            new Thread(() => ReceberCsvDoWavy(client)).Start();
+        }
+    }
+
+    // Método que recebe linhas CSV (com cabeçalho + N linhas) e guarda num ficheiro wavyID.csv
+    static void ReceberCsvDoWavy(TcpClient client)
+    {
+        List<string> linhasRecebidas = new();
+
+        try
+        {
+            using NetworkStream stream = client.GetStream();
+            using StreamReader reader = new StreamReader(stream);
+            using StreamWriter writer = new StreamWriter(stream) { AutoFlush = true };
+
+            string linha;
+            while ((linha = reader.ReadLine()) != null)
             {
-                var partes = input.Split(' ');
-                string alvo = partes.Length > 1 ? partes[1] : ".";
-                CsvExporter.LimparCsv(diretorioCsv, alvo);
+                // QUIT indica fim do CSV
+                if (linha.Trim().Equals("QUIT", StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                linhasRecebidas.Add(linha);
             }
-            else if (input.Equals("Export", StringComparison.OrdinalIgnoreCase))
+
+            if (linhasRecebidas.Count > 1)
             {
-                lock (dadosLock)
+                // Ex.: 2ª linha => "WAVYID, 2025-xx-xx, etc."
+                string wavyID = linhasRecebidas[1].Split(',')[0];
+                string path = Path.Combine(pastaCsvs, wavyID + ".csv");
+
+                // Se o ficheiro não existir, escreve primeiro o cabeçalho
+                if (!File.Exists(path))
+                    File.WriteAllLines(path, new[] { linhasRecebidas[0] });
+
+                // Acrescenta as linhas de dados
+                File.AppendAllLines(path, linhasRecebidas.Skip(1));
+
+                // Responde ao Wavy com sucesso
+                writer.WriteLine("RECEBIDO 200");
+                Console.WriteLine($"CSV de {wavyID} recebido e guardado em {path}.");
+            }
+            else
+            {
+                // CSV inválido
+                writer.WriteLine("ERRO 400");
+                Console.WriteLine("ERRO: CSV inválido ou vazio.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Erro ao receber CSV: " + ex.Message);
+        }
+        finally
+        {
+            client.Close();
+        }
+    }
+
+    // Agrupa todos os ficheiros .csv com linhas que terminem em "False" e envia ao servidor
+    static void EnviarCsvsAoServidor()
+    {
+        try
+        {
+            var ficheiros = Directory.GetFiles(pastaCsvs, "*.csv");
+            List<string> linhasParaEnviar = new();
+            string cabecalho = "";
+
+            // Percorre cada CSV do aggregator
+            foreach (var file in ficheiros)
+            {
+                var linhas = File.ReadAllLines(file).ToList();
+                if (linhas.Count == 0) continue;
+
+                // Usa o cabeçalho do primeiro CSV encontrado
+                if (string.IsNullOrWhiteSpace(cabecalho))
+                    cabecalho = linhas[0];
+
+                // Linhas que terminam em "False"
+                foreach (var l in linhas.Skip(1))
                 {
-                    CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+                    if (l.EndsWith("False", StringComparison.OrdinalIgnoreCase))
+                        linhasParaEnviar.Add(l);
                 }
             }
-            else if (input.Equals("Enviar", StringComparison.OrdinalIgnoreCase))
+
+            if (linhasParaEnviar.Count == 0)
             {
-                lock (dadosLock)
+                Console.WriteLine("Nenhum dado novo para enviar ao servidor.");
+                return;
+            }
+
+            // Cria um ficheiro temporário com cabeçalho + linhas a enviar
+            File.WriteAllLines(tempCsv, new[] { cabecalho }.Concat(linhasParaEnviar));
+
+            // Envia esse temp ao servidor
+            using TcpClient client = new TcpClient(servidorIP, servidorPorta);
+            using NetworkStream stream = client.GetStream();
+            using StreamWriter writer = new StreamWriter(stream) { AutoFlush = true };
+            using StreamReader reader = new StreamReader(stream);
+
+            // Manda as linhas
+            foreach (var linha in File.ReadAllLines(tempCsv))
+            {
+                writer.WriteLine(linha);
+            }
+            // Sinal de fim
+            writer.WriteLine("QUIT");
+
+            // Lê resposta
+            string resposta = reader.ReadLine();
+            if (resposta != null && resposta.StartsWith("RECEBIDO"))
+            {
+                Console.WriteLine("Dados enviados com sucesso ao servidor. Marcando como enviados...");
+
+                // Marca as linhas nos ficheiros originais
+                foreach (var file in ficheiros)
                 {
-                    CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
-                    if (EnviarCsvsAoServidor())
+                    var linesFile = File.ReadAllLines(file).ToList();
+                    for (int i = 0; i < linesFile.Count; i++)
                     {
-                        CsvExporter.MarcarComoEnviado(wavys);
-                        CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
+                        if (linesFile[i].EndsWith("False", StringComparison.OrdinalIgnoreCase)
+                            && linhasParaEnviar.Contains(linesFile[i]))
+                        {
+                            linesFile[i] = linesFile[i].Replace("False", "True");
+                        }
                     }
+                    File.WriteAllLines(file, linesFile);
                 }
             }
             else
             {
-                TcpClient client = listener.AcceptTcpClient();
-                Thread clientThread = new Thread(() => HandleWavyClient(client));
-                clientThread.Start();
+                Console.WriteLine("⚠️ Falha na confirmação do servidor ou sem resposta.");
             }
-        }
-    }
-
-    static void ConnectToServer()
-    {
-        try
-        {
-            persistentServerClient = new TcpClient(serverIP, serverPort);
-            NetworkStream ns = persistentServerClient.GetStream();
-            serverReader = new StreamReader(ns, Encoding.UTF8);
-            serverWriter = new StreamWriter(ns, Encoding.UTF8) { AutoFlush = true };
-
-            string greeting = serverReader.ReadLine();
-            Console.WriteLine("Conectado ao servidor: " + greeting);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Erro ao conectar ao servidor: " + ex.Message);
-        }
-    }
-
-    static void HandleWavyClient(TcpClient client)
-    {
-        using (NetworkStream stream = client.GetStream())
-        using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
-        {
-            string linha;
-            while ((linha = reader.ReadLine()) != null)
-            {
-                Console.WriteLine("Recebido: " + linha);
-
-                if (linha.StartsWith("DADOS "))
-                {
-                    string json = linha.Substring(6);
-                    try
-                    {
-                        Sensor sensor = JsonSerializer.Deserialize<Sensor>(json);
-                        if (sensor != null)
-                        {
-                            lock (dadosLock)
-                            {
-                                // Aqui falta lógica para associar a WAVY correta
-                                // Exemplo rápido:
-                                Wavy wavy = wavys.Find(w => w.Name == "WAVY1");
-                                if (wavy == null)
-                                {
-                                    wavy = new Wavy { Name = "WAVY1" }; // ou outro ID real
-                                    wavys.Add(wavy);
-                                }
-                                wavy.Sensores.Add(sensor);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine("Erro ao processar sensor: " + ex.Message);
-                    }
-                }
-            }
-        }
-    }
-
-    static void AgendarEnvio()
-    {
-        DateTime agora = DateTime.Now;
-        DateTime proximoEnvio = new DateTime(agora.Year, agora.Month, agora.Day, 22, 30, 0);
-        if (agora > proximoEnvio)
-            proximoEnvio = proximoEnvio.AddDays(1);
-
-        TimeSpan delay = proximoEnvio - agora;
-        envioTimer = new Timer(EnviarDadosAgendados, null, delay, Timeout.InfiniteTimeSpan);
-        Console.WriteLine("Envio agendado para: " + proximoEnvio);
-    }
-
-    static void EnviarDadosAgendados(object state)
-    {
-        lock (dadosLock)
-        {
-            CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
-            if (EnviarCsvsAoServidor())
-            {
-                CsvExporter.MarcarComoEnviado(wavys);
-                CsvExporter.ExportarDadosWavys(wavys, diretorioCsv);
-            }
-        }
-        AgendarEnvio();
-    }
-
-    static bool EnviarCsvsAoServidor()
-    {
-        try
-        {
-            foreach (var file in Directory.GetFiles(diretorioCsv, "*.csv"))
-            {
-                string conteudo = File.ReadAllText(file);
-                serverWriter.WriteLine(conteudo);
-            }
-            serverWriter.WriteLine("QUIT");
-
-            string resposta = serverReader.ReadLine();
-            return resposta.StartsWith("RECEBIDO 200");
         }
         catch (Exception ex)
         {
             Console.WriteLine("Erro ao enviar CSVs: " + ex.Message);
-            return false;
+        }
+    }
+
+    // Limpa cada CSV, removendo linhas enviadas (True). Apaga o ficheiro se ficar vazio
+    static void LimparCsvs()
+    {
+        try
+        {
+            var ficheiros = Directory.GetFiles(pastaCsvs, "*.csv");
+            foreach (var file in ficheiros)
+            {
+                var linhas = File.ReadAllLines(file).ToList();
+                if (linhas.Count == 0) continue;
+
+                var cabecalho = linhas[0];
+                var restantes = linhas.Skip(1)
+                                      .Where(l => !l.EndsWith("True", StringComparison.OrdinalIgnoreCase))
+                                      .ToList();
+
+                if (restantes.Count == 0)
+                {
+                    File.Delete(file);
+                    Console.WriteLine($"Ficheiro '{Path.GetFileName(file)}' removido (tudo enviado).");
+                }
+                else
+                {
+                    File.WriteAllLines(file, new[] { cabecalho }.Concat(restantes));
+                    Console.WriteLine($"Ficheiro '{Path.GetFileName(file)}' limpo (linhas enviadas removidas).");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Erro ao limpar CSVs: " + ex.Message);
         }
     }
 }

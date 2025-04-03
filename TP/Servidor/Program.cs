@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore;
 
 class DataServer
 {
-    private static int port = 13000;
+    private static int port = 8080;
     private static object dbLock = new object();
 
     static void Main()
@@ -21,13 +21,13 @@ class DataServer
             context.Database.EnsureCreated();
             Console.WriteLine("Base de dados pronta.");
         }
-
+        Console.WriteLine($"SERVIDOR em escuta na porta {port}...");
         // Thread para comandos na consola
         new Thread(() => ConsoleCommandLoop()).Start();
 
-        TcpListener listener = new TcpListener(IPAddress.Any, port);
+        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
         listener.Start();
-        Console.WriteLine($"SERVIDOR em escuta na porta {port}...");
+       
 
         while (true)
         {
@@ -282,4 +282,79 @@ class DataServer
             }
         }
     }
+    static void MostrarAgregador(string id)
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            var agg = context.Agregadores
+                .Include(a => a.Wavys)
+                    .ThenInclude(w => w.Sensores)
+                .FirstOrDefault(a => a.Name == id);
+
+            if (agg == null)
+            {
+                Console.WriteLine("Agregador não encontrado.");
+                return;
+            }
+
+            Console.WriteLine($"Agregador: {agg.Name}, WAVYs: {agg.Wavys.Count}");
+            foreach (var w in agg.Wavys)
+            {
+                Console.WriteLine($" - Wavy: {w.Name}, Estado: {w.Estado}, Sensores: {w.Sensores.Count}");
+            }
+        }
+    }
+
+    static void MostrarWavy(string id)
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            var wavy = context.Wavys
+                .Include(w => w.Sensores)
+                .FirstOrDefault(w => w.Name == id);
+
+            if (wavy == null)
+            {
+                Console.WriteLine("WAVY não encontrada.");
+                return;
+            }
+
+            Console.WriteLine($"WAVY: {wavy.Name}, Estado: {wavy.Estado}");
+            foreach (var sensor in wavy.Sensores)
+            {
+                Console.WriteLine($" - Sensor: {sensor.Nome}, {sensor.DataHora:yyyy-MM-dd HH:mm:ss}");
+                foreach (var kvp in sensor.Valores)
+                {
+                    Console.WriteLine($"   {kvp.Key}: {kvp.Value}");
+                }
+            }
+        }
+    }
+
+    static void ListarAgregadores()
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            var aggs = context.Agregadores.ToList();
+            Console.WriteLine("Agregadores existentes:");
+            foreach (var a in aggs)
+                Console.WriteLine(" - " + a.Name);
+        }
+    }
+
+    static void ListarWavys()
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            var wavys = context.Wavys.ToList();
+            Console.WriteLine("WAVYs existentes:");
+            foreach (var w in wavys)
+                Console.WriteLine(" - " + w.Name);
+        }
+    }
+
 }

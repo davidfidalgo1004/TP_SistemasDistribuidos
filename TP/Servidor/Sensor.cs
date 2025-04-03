@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Servidor
 {
@@ -11,6 +12,7 @@ namespace Servidor
         public DateTime DataHora { get; set; }
 
         // Novo: múltiplos valores para um sensor (ex: latitude, longitude)
+        [NotMapped]
         public Dictionary<string, string> Valores { get; set; } = new Dictionary<string, string>();
 
         // Novo: indica se os dados deste sensor já foram enviados
