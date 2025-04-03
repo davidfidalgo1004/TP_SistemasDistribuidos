@@ -61,7 +61,7 @@ class Aggregator
     // Escuta na portaAgregador e recebe CSV das WAVYs
     static void ServidorEscuta()
     {
-        TcpListener listener = new TcpListener(IPAddress.Any, portaAgregador);
+        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.1.1"), portaAgregador);
         listener.Start();
         Console.WriteLine($"Agregador a escutar na porta {portaAgregador}...");
 
@@ -96,15 +96,26 @@ class Aggregator
             if (linhasRecebidas.Count > 1)
             {
                 // Ex.: 2ª linha => "WAVYID, 2025-xx-xx, etc."
-                string wavyID = linhasRecebidas[1].Split(',')[0];
+                string idLine = linhasRecebidas[0];
+                string wavyID = "Desconhecido";
+
+                if (idLine.StartsWith("ID="))
+                    wavyID = idLine.Substring(3).Trim();
+                else
+                {
+                    Console.WriteLine("ERRO: ID da WAVY não encontrado na primeira linha.");
+                    writer.WriteLine("ERRO 401");
+                    return;
+                }
+
                 string path = Path.Combine(pastaCsvs, wavyID + ".csv");
 
                 // Se o ficheiro não existir, escreve primeiro o cabeçalho
                 if (!File.Exists(path))
-                    File.WriteAllLines(path, new[] { linhasRecebidas[0] });
+                    File.WriteAllLines(path, new[] { linhasRecebidas[1] });
 
                 // Acrescenta as linhas de dados
-                File.AppendAllLines(path, linhasRecebidas.Skip(1));
+                File.AppendAllLines(path, linhasRecebidas.Skip(2));
 
                 // Responde ao Wavy com sucesso
                 writer.WriteLine("RECEBIDO 200");
