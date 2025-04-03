@@ -9,20 +9,26 @@ using System.Threading;
 
 class Aggregator
 {
-    private static string pastaCsvs = "csvs";
-    private static string tempCsv = "aggregador_temp.csv";
+    // Vamos construir a pasta do Agregador com base no ID
+    private static string aggregatorFolder;
+    private static string pastaCsvs;        // = aggregatorFolder + /csvs
+
+    // Ficheiro temporário que usamos ao enviar ao servidor
+    private static string tempCsv = "temp.csv";
+
+    // Dados do servidor final
     private static string servidorIP = "127.0.1.1";
     private static int servidorPorta = 8080;
 
-    // Porta base do agregador
+    // Porta base do Agregador
     private static int portaAgregador = 7000;
 
-    // Tempo para envio periódico para o servidor
+    // Intervalo para envio periódico (em minutos)
     private static int intervaloEnvioMin = 30;
 
     static void Main()
     {
-        Console.Write("ID do Agregador (Apenas o numero): ");
+        Console.Write("ID do Agregador (apenas número): ");
         string agregadorID = Console.ReadLine()?.Trim();
         if (!int.TryParse(agregadorID, out int idNumerico))
         {
@@ -30,38 +36,48 @@ class Aggregator
             return;
         }
 
-        // Calcula porta com base no ID
+        // Constrói a porta = 7000 + ID
         portaAgregador = 7000 + idNumerico;
-        Console.WriteLine($"Agregador associado à porta {portaAgregador}.");
 
-        // Cria a pasta onde ficarão os CSV
+        // Cria a pasta principal do agregador, ex. "Agregador1"
+        aggregatorFolder = "Agregador" + idNumerico;
+
+        // A subpasta csvs ficará em "Agregador1/csvs"
+        pastaCsvs = Path.Combine(aggregatorFolder, "csvs");
+
+        // Criar a pasta do agregador e a subpasta csvs
         Directory.CreateDirectory(pastaCsvs);
+
+        Console.WriteLine($"Agregador '{aggregatorFolder}' associado à porta {portaAgregador}.");
         Console.WriteLine("Agregador em execução...");
 
-        // Thread para receber dados das WAVYs
+        // 1) Thread para receber dados das WAVYs
         new Thread(ServidorEscuta).Start();
 
-        // Timer para envio periódico (ex.: a cada 30min)
-        Timer envioTimer = new Timer(_ => EnviarCsvsAoServidor(), null,
-                                     TimeSpan.FromMinutes(1), // Tempo até ao 1º envio
+        // 2) Timer para envio periódico ao servidor
+        Timer envioTimer = new Timer(_ => EnviarCsvsAoServidor(),
+                                     null,
+                                     TimeSpan.FromMinutes(1),         // Espera 1 min para primeiro envio
                                      TimeSpan.FromMinutes(intervaloEnvioMin));
 
-        // Timer para limpeza automática a cada 2 dias
-        Timer limpezaTimer = new Timer(_ => LimparCsvs(), null,
-                                       TimeSpan.FromDays(2),   // Tempo até primeira limpeza
-                                       TimeSpan.FromDays(2));  // Repetição a cada 2 dias
+        // 3) Timer para limpeza automática a cada 2 dias
+        Timer limpezaTimer = new Timer(_ => LimparCsvs(),
+                                       null,
+                                       TimeSpan.FromDays(2),  // Espera 2 dias para primeira limpeza
+                                       TimeSpan.FromDays(2)); // Repetição a cada 2 dias
 
-        // Mantém a aplicação viva
+        // Mantém a app viva
         while (true)
         {
             Thread.Sleep(1000);
         }
     }
 
-    // Escuta na portaAgregador e recebe CSV das WAVYs
+    // Escuta na porta do Agregador e recebe CSV das WAVYs
     static void ServidorEscuta()
     {
-        TcpListener listener = new TcpListener(IPAddress.Any, portaAgregador);
+     
+        TcpListener listener = new TcpListener(IPAddress.Parse("127.0.1.1"), portaAgregador);
         listener.Start();
         Console.WriteLine($"Agregador a escutar na porta {portaAgregador}...");
 
@@ -72,10 +88,10 @@ class Aggregator
         }
     }
 
-    // Método que recebe linhas CSV (com cabeçalho + N linhas) e guarda num ficheiro wavyID.csv
+    // Recebe linhas CSV (cabeçalho + N linhas) e guarda em aggregatorFolder/csvs/wavyID.csv
     static void ReceberCsvDoWavy(TcpClient client)
     {
-        List<string> linhasRecebidas = new();
+        var linhasRecebidas = new List<string>();
 
         try
         {
@@ -86,17 +102,21 @@ class Aggregator
             string linha;
             while ((linha = reader.ReadLine()) != null)
             {
-                // QUIT indica fim do CSV
+                // QUIT => fim do CSV
                 if (linha.Trim().Equals("QUIT", StringComparison.OrdinalIgnoreCase))
                     break;
 
                 linhasRecebidas.Add(linha);
             }
 
+            // Se recebeu ao menos cabeçalho+1
             if (linhasRecebidas.Count > 1)
             {
                 // Ex.: 2ª linha => "WAVYID, 2025-xx-xx, etc."
+                // Pegamos o wavyID como a primeira coluna
                 string wavyID = linhasRecebidas[1].Split(',')[0];
+
+                // Gera o caminho final
                 string path = Path.Combine(pastaCsvs, wavyID + ".csv");
 
                 // Se o ficheiro não existir, escreve primeiro o cabeçalho
@@ -106,7 +126,7 @@ class Aggregator
                 // Acrescenta as linhas de dados
                 File.AppendAllLines(path, linhasRecebidas.Skip(1));
 
-                // Responde ao Wavy com sucesso
+                // Responde com sucesso
                 writer.WriteLine("RECEBIDO 200");
                 Console.WriteLine($"CSV de {wavyID} recebido e guardado em {path}.");
             }
@@ -127,26 +147,26 @@ class Aggregator
         }
     }
 
-    // Agrupa todos os ficheiros .csv com linhas que terminem em "False" e envia ao servidor
+    // Junta todos os ficheiros .csv (com "False") e envia ao servidor => "127.0.1.1:8080"
     static void EnviarCsvsAoServidor()
     {
         try
         {
+            // Procura os CSV no aggregatorFolder/csvs/
             var ficheiros = Directory.GetFiles(pastaCsvs, "*.csv");
-            List<string> linhasParaEnviar = new();
+            var linhasParaEnviar = new List<string>();
             string cabecalho = "";
 
-            // Percorre cada CSV do aggregator
             foreach (var file in ficheiros)
             {
                 var linhas = File.ReadAllLines(file).ToList();
                 if (linhas.Count == 0) continue;
 
-                // Usa o cabeçalho do primeiro CSV encontrado
+                // Usa o cabeçalho do primeiro CSV válido
                 if (string.IsNullOrWhiteSpace(cabecalho))
                     cabecalho = linhas[0];
 
-                // Linhas que terminam em "False"
+                // Pega as linhas que terminam em "False"
                 foreach (var l in linhas.Skip(1))
                 {
                     if (l.EndsWith("False", StringComparison.OrdinalIgnoreCase))
@@ -160,10 +180,10 @@ class Aggregator
                 return;
             }
 
-            // Cria um ficheiro temporário com cabeçalho + linhas a enviar
+            // Cria um ficheiro temporário com cabeçalho + linhas
             File.WriteAllLines(tempCsv, new[] { cabecalho }.Concat(linhasParaEnviar));
 
-            // Envia esse temp ao servidor
+            // Envia o ficheiro temp ao servidor
             using TcpClient client = new TcpClient(servidorIP, servidorPorta);
             using NetworkStream stream = client.GetStream();
             using StreamWriter writer = new StreamWriter(stream) { AutoFlush = true };
@@ -174,16 +194,15 @@ class Aggregator
             {
                 writer.WriteLine(linha);
             }
-            // Sinal de fim
             writer.WriteLine("QUIT");
 
-            // Lê resposta
+            // Lê a resposta
             string resposta = reader.ReadLine();
             if (resposta != null && resposta.StartsWith("RECEBIDO"))
             {
                 Console.WriteLine("Dados enviados com sucesso ao servidor. Marcando como enviados...");
 
-                // Marca as linhas nos ficheiros originais
+                // Marca as linhas 'False' => 'True' em cada ficheiro
                 foreach (var file in ficheiros)
                 {
                     var linesFile = File.ReadAllLines(file).ToList();
@@ -209,7 +228,7 @@ class Aggregator
         }
     }
 
-    // Limpa cada CSV, removendo linhas enviadas (True). Apaga o ficheiro se ficar vazio
+    // Limpa os ficheiros CSV, removendo as linhas 'True', e apaga o ficheiro se ficar vazio
     static void LimparCsvs()
     {
         try
