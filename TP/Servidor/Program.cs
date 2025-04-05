@@ -21,13 +21,14 @@ class DataServer
             context.Database.EnsureCreated();
             Console.WriteLine("Base de dados pronta.");
         }
+
         Console.WriteLine($"SERVIDOR em escuta na porta {port}...");
-        // Thread para comandos na consola
-        new Thread(() => ConsoleCommandLoop()).Start();
+
+        // Inicia menu administrativo
+        new Thread(() => MenuServidor()).Start();
 
         TcpListener listener = new TcpListener(IPAddress.Parse("127.0.0.1"), port);
         listener.Start();
-       
 
         while (true)
         {
@@ -37,139 +38,56 @@ class DataServer
         }
     }
 
-    static void ConsoleCommandLoop()
+    static void MenuServidor()
     {
         while (true)
         {
-            Console.Write("Comando> ");
-            var input = Console.ReadLine();
-            if (string.IsNullOrWhiteSpace(input)) continue;
+            Console.WriteLine("\n========= MENU SERVIDOR =========");
+            Console.WriteLine("1 - Mostrar Agregadores");
+            Console.WriteLine("2 - Mostrar WAVYs");
+            Console.WriteLine("3 - Mostrar dados de um Agregador");
+            Console.WriteLine("4 - Mostrar dados de uma WAVY");
+            Console.WriteLine("5 - Exportar dados de um Agregador (CSV)");
+            Console.WriteLine("6 - Exportar dados de uma WAVY (CSV)");
+            Console.WriteLine("7 - Mostrar Estatísticas do Sistema");
+            Console.WriteLine("8 - Sair do Menu");
+            Console.Write("Escolha uma opção: ");
+            var op = Console.ReadLine()?.Trim();
 
-            var parts = input.Split(' ', 3);
-            string cmd = parts[0].ToLower();
-
-            if (cmd == "show" && parts.Length == 3)
+            switch (op)
             {
-                if (parts[1] == "aggregator")
-                    MostrarAgregador(parts[2]);
-                else if (parts[1] == "wavy")
-                    MostrarWavy(parts[2]);
-            }
-            else if (cmd == "list")
-            {
-                if (parts.Length > 1 && parts[1] == "aggregators")
+                case "1":
                     ListarAgregadores();
-                else if (parts.Length > 1 && parts[1] == "wavys")
+                    break;
+                case "2":
                     ListarWavys();
+                    break;
+                case "3":
+                    Console.Write("ID do Agregador: ");
+                    MostrarAgregador(Console.ReadLine()?.Trim());
+                    break;
+                case "4":
+                    Console.Write("ID da WAVY: ");
+                    MostrarWavy(Console.ReadLine()?.Trim());
+                    break;
+                case "5":
+                    Console.Write("ID do Agregador: ");
+                    ExportarAgregadorCsv(Console.ReadLine()?.Trim());
+                    break;
+                case "6":
+                    Console.Write("ID da WAVY: ");
+                    ExportarWavyCsv(Console.ReadLine()?.Trim());
+                    break;
+                case "7":
+                    MostrarEstatisticas();
+                    break;
+                case "8":
+                    Console.WriteLine("A sair do menu. Servidor continua a receber dados...");
+                    return;
+                default:
+                    Console.WriteLine("Opção inválida.");
+                    break;
             }
-            else if (cmd == "export" && parts.Length == 3)
-            {
-                if (parts[1] == "aggregator")
-                    ExportarAgregadorCsv(parts[2]);
-                else if (parts[1] == "wavy")
-                    ExportarWavyCsv(parts[2]);
-            }
-            else if (cmd == "stats")
-            {
-                MostrarEstatisticas();
-            }
-            else
-            {
-                Console.WriteLine("Comando inválido. Exemplos:");
-                Console.WriteLine(" - show aggregator AG1");
-                Console.WriteLine(" - show wavy WAVY1");
-                Console.WriteLine(" - list aggregators");
-                Console.WriteLine(" - list wavys");
-                Console.WriteLine(" - export aggregator AG1");
-                Console.WriteLine(" - export wavy WAVY1");
-                Console.WriteLine(" - stats");
-            }
-        }
-    }
-
-    static void MostrarEstatisticas()
-    {
-        lock (dbLock)
-        {
-            using var context = new DBContext();
-            int totalAgregadores = context.Agregadores.Count();
-            int totalWavys = context.Wavys.Count();
-            int totalSensores = context.Wavys.SelectMany(w => w.Sensores).Count();
-            int enviados = context.Wavys.SelectMany(w => w.Sensores).Count(s => s.DadosEnviados);
-            int pendentes = totalSensores - enviados;
-
-            Console.WriteLine("Resumo do Sistema:");
-            Console.WriteLine($" - Nº Agregadores: {totalAgregadores}");
-            Console.WriteLine($" - Nº WAVYs: {totalWavys}");
-            Console.WriteLine($" - Nº Sensores: {totalSensores}");
-            Console.WriteLine($" - Sensores enviados: {enviados}");
-            Console.WriteLine($" - Sensores pendentes: {pendentes}");
-        }
-    }
-
-    static void ExportarAgregadorCsv(string id)
-    {
-        lock (dbLock)
-        {
-            using var context = new DBContext();
-            var agg = context.Agregadores
-                .Include(a => a.Wavys)
-                    .ThenInclude(w => w.Sensores)
-                .FirstOrDefault(a => a.Name == id);
-
-            if (agg == null)
-            {
-                Console.WriteLine("Agregador não encontrado.");
-                return;
-            }
-
-            string path = $"agregador_{id}.csv";
-            using var writer = new StreamWriter(path);
-            writer.WriteLine("WavyID,Sensor,DataHora,Chave,Valor,DadosEnviados");
-
-            foreach (var wavy in agg.Wavys)
-            {
-                foreach (var sensor in wavy.Sensores)
-                {
-                    foreach (var kvp in sensor.Valores)
-                    {
-                        writer.WriteLine($"{wavy.Name},{sensor.Nome},{sensor.DataHora:yyyy-MM-dd HH:mm:ss},{kvp.Key},{kvp.Value},{sensor.DadosEnviados}");
-                    }
-                }
-            }
-
-            Console.WriteLine($"Exportado para {path}");
-        }
-    }
-
-    static void ExportarWavyCsv(string id)
-    {
-        lock (dbLock)
-        {
-            using var context = new DBContext();
-            var wavy = context.Wavys
-                .Include(w => w.Sensores)
-                .FirstOrDefault(w => w.Name == id);
-
-            if (wavy == null)
-            {
-                Console.WriteLine("WAVY não encontrada.");
-                return;
-            }
-
-            string path = $"wavy_{id}.csv";
-            using var writer = new StreamWriter(path);
-            writer.WriteLine("WavyID,Sensor,DataHora,Chave,Valor,DadosEnviados");
-
-            foreach (var sensor in wavy.Sensores)
-            {
-                foreach (var kvp in sensor.Valores)
-                {
-                    writer.WriteLine($"{wavy.Name},{sensor.Nome},{sensor.DataHora:yyyy-MM-dd HH:mm:ss},{kvp.Key},{kvp.Value},{sensor.DadosEnviados}");
-                }
-            }
-
-            Console.WriteLine($"Exportado para {path}");
         }
     }
 
@@ -214,13 +132,10 @@ class DataServer
         if (linhas.Count == 0) return;
 
         var header = linhas[0];
-        var colunas = header.Split(',');
-
         if (!header.Contains("WavyID") || !header.Contains("Sensor"))
-            throw new Exception("Cabecalho CSV invalido");
+            throw new Exception("Cabeçalho CSV inválido");
 
         var agregador = new Agregador { Name = "Agregador1" };
-
         var wavysDict = new Dictionary<string, Wavy>();
 
         for (int i = 1; i < linhas.Count; i++)
@@ -282,6 +197,7 @@ class DataServer
             }
         }
     }
+
     static void MostrarAgregador(string id)
     {
         lock (dbLock)
@@ -289,7 +205,7 @@ class DataServer
             using var context = new DBContext();
             var agg = context.Agregadores
                 .Include(a => a.Wavys)
-                    .ThenInclude(w => w.Sensores)
+                .ThenInclude(w => w.Sensores)
                 .FirstOrDefault(a => a.Name == id);
 
             if (agg == null)
@@ -357,4 +273,89 @@ class DataServer
         }
     }
 
+    static void ExportarAgregadorCsv(string id)
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            var agg = context.Agregadores
+                .Include(a => a.Wavys)
+                .ThenInclude(w => w.Sensores)
+                .FirstOrDefault(a => a.Name == id);
+
+            if (agg == null)
+            {
+                Console.WriteLine("Agregador não encontrado.");
+                return;
+            }
+
+            string path = $"agregador_{id}.csv";
+            using var writer = new StreamWriter(path);
+            writer.WriteLine("WavyID,Sensor,DataHora,Chave,Valor,DadosEnviados");
+
+            foreach (var wavy in agg.Wavys)
+            {
+                foreach (var sensor in wavy.Sensores)
+                {
+                    foreach (var kvp in sensor.Valores)
+                    {
+                        writer.WriteLine($"{wavy.Name},{sensor.Nome},{sensor.DataHora:yyyy-MM-dd HH:mm:ss},{kvp.Key},{kvp.Value},{sensor.DadosEnviados}");
+                    }
+                }
+            }
+
+            Console.WriteLine($"Exportado para {path}");
+        }
+    }
+
+    static void ExportarWavyCsv(string id)
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            var wavy = context.Wavys
+                .Include(w => w.Sensores)
+                .FirstOrDefault(w => w.Name == id);
+
+            if (wavy == null)
+            {
+                Console.WriteLine("WAVY não encontrada.");
+                return;
+            }
+
+            string path = $"wavy_{id}.csv";
+            using var writer = new StreamWriter(path);
+            writer.WriteLine("WavyID,Sensor,DataHora,Chave,Valor,DadosEnviados");
+
+            foreach (var sensor in wavy.Sensores)
+            {
+                foreach (var kvp in sensor.Valores)
+                {
+                    writer.WriteLine($"{wavy.Name},{sensor.Nome},{sensor.DataHora:yyyy-MM-dd HH:mm:ss},{kvp.Key},{kvp.Value},{sensor.DadosEnviados}");
+                }
+            }
+
+            Console.WriteLine($"Exportado para {path}");
+        }
+    }
+
+    static void MostrarEstatisticas()
+    {
+        lock (dbLock)
+        {
+            using var context = new DBContext();
+            int totalAgregadores = context.Agregadores.Count();
+            int totalWavys = context.Wavys.Count();
+            int totalSensores = context.Wavys.SelectMany(w => w.Sensores).Count();
+            int enviados = context.Wavys.SelectMany(w => w.Sensores).Count(s => s.DadosEnviados);
+            int pendentes = totalSensores - enviados;
+
+            Console.WriteLine("Resumo do Sistema:");
+            Console.WriteLine($" - Nº Agregadores: {totalAgregadores}");
+            Console.WriteLine($" - Nº WAVYs: {totalWavys}");
+            Console.WriteLine($" - Nº Sensores: {totalSensores}");
+            Console.WriteLine($" - Sensores enviados: {enviados}");
+            Console.WriteLine($" - Sensores pendentes: {pendentes}");
+        }
+    }
 }
